@@ -1,5 +1,7 @@
 <?php
 /**
+ * HTML API: WP_HTML_Tag_Processor class
+ *
  * Scans through an HTML document to find specific tags, then
  * transforms those tags by adding, removing, or updating the
  * values of the HTML attributes within that tag (opener).
@@ -13,9 +15,6 @@
  *  - Prune the whitespace when removing classes/attributes: e.g. "a b c" -> "c" not " c".
  *    This would increase the size of the changes for some operations but leave more
  *    natural-looking output HTML.
- *  - Decode HTML character references within class names when matching. E.g. match having
- *    class `1<"2` needs to recognize `class="1&lt;&quot;2"`. Currently the Tag Processor
- *    will fail to find the right tag if the class name is encoded as such.
  *  - Properly decode HTML character references in `get_attribute()`. PHP's
  *    `html_entity_decode()` is wrong in a couple ways: it doesn't account for the
  *    no-ambiguous-ampersand rule, and it improperly handles the way semicolons may
@@ -27,7 +26,7 @@
  */
 
 /**
- * Modifies attributes in an HTML document for tags matching a query.
+ * Core class used to modify attributes in an HTML document for tags matching a query.
  *
  * ## Usage
  *
@@ -38,12 +37,11 @@
  *  3. Request changes to the attributes in those tag(s).
  *
  * Example:
- * ```php
+ *
  *     $tags = new WP_HTML_Tag_Processor( $html );
  *     if ( $tags->next_tag( 'option' ) ) {
  *         $tags->set_attribute( 'selected', true );
  *     }
- * ```
  *
  * ### Finding tags
  *
@@ -54,9 +52,8 @@
  * regardless of what kind it is.
  *
  * If you want to _find whatever the next tag is_:
- * ```php
+ *
  *     $tags->next_tag();
- * ```
  *
  * | Goal                                                      | Query                                                                           |
  * |-----------------------------------------------------------|---------------------------------------------------------------------------------|
@@ -87,7 +84,7 @@
  * provided by the processor or external state or variables.
  *
  * Example:
- * ```php
+ *
  *     // Paint up to the first five DIV or SPAN tags marked with the "jazzy" style.
  *     $remaining_count = 5;
  *     while ( $remaining_count > 0 && $tags->next_tag() ) {
@@ -99,7 +96,6 @@
  *             $remaining_count--;
  *         }
  *     }
- * ```
  *
  * `get_attribute()` will return `null` if the attribute wasn't present
  * on the tag when it was called. It may return `""` (the empty string)
@@ -107,6 +103,56 @@
  * For boolean attributes, those whose name is present but no value is
  * given, it will return `true` (the only way to set `false` for an
  * attribute is to remove it).
+ *
+ * #### When matching fails
+ *
+ * When `next_tag()` returns `false` it could mean different things:
+ *
+ *  - The requested tag wasn't found in the input document.
+ *  - The input document ended in the middle of an HTML syntax element.
+ *
+ * When a document ends in the middle of a syntax element it will pause
+ * the processor. This is to make it possible in the future to extend the
+ * input document and proceed - an important requirement for chunked
+ * streaming parsing of a document.
+ *
+ * Example:
+ *
+ *     $processor = new WP_HTML_Tag_Processor( 'This <div is="a" partial="token' );
+ *     false === $processor->next_tag();
+ *
+ * If a special element (see next section) is encountered but no closing tag
+ * is found it will count as an incomplete tag. The parser will pause as if
+ * the opening tag were incomplete.
+ *
+ * Example:
+ *
+ *     $processor = new WP_HTML_Tag_Processor( '<style>// there could be more styling to come' );
+ *     false === $processor->next_tag();
+ *
+ *     $processor = new WP_HTML_Tag_Processor( '<style>// this is everything</style><div>' );
+ *     true === $processor->next_tag( 'DIV' );
+ *
+ * #### Special elements
+ *
+ * Some HTML elements are handled in a special way; their start and end tags
+ * act like a void tag. These are special because their contents can't contain
+ * HTML markup. Everything inside these elements is handled in a special way
+ * and content that _appears_ like HTML tags inside of them isn't. There can
+ * be no nesting in these elements.
+ *
+ * In the following list, "raw text" means that all of the content in the HTML
+ * until the matching closing tag is treated verbatim without any replacements
+ * and without any parsing.
+ *
+ *  - IFRAME allows no content but requires a closing tag.
+ *  - NOEMBED (deprecated) content is raw text.
+ *  - NOFRAMES (deprecated) content is raw text.
+ *  - SCRIPT content is plaintext apart from legacy rules allowing `</script>` inside an HTML comment.
+ *  - STYLE content is raw text.
+ *  - TITLE content is plain text but character references are decoded.
+ *  - TEXTAREA content is plain text but character references are decoded.
+ *  - XMP (deprecated) content is raw text.
  *
  * ### Modifying HTML attributes for a found tag
  *
@@ -116,12 +162,11 @@
  * nothing and move on to the next opening tag.
  *
  * Example:
- * ```php
- *     if ( $tags->next_tag( array( 'class' => 'wp-group-block' ) ) ) {
+ *
+ *     if ( $tags->next_tag( array( 'class_name' => 'wp-group-block' ) ) ) {
  *         $tags->set_attribute( 'title', 'This groups the contained content.' );
  *         $tags->remove_attribute( 'data-test-id' );
  *     }
- * ```
  *
  * If `set_attribute()` is called for an existing attribute it will
  * overwrite the existing value. Similarly, calling `remove_attribute()`
@@ -141,7 +186,7 @@
  * entire `class` attribute will be removed.
  *
  * Example:
- * ```php
+ *
  *     // from `<span>Yippee!</span>`
  *     //   to `<span class="is-active">Yippee!</span>`
  *     $tags->add_class( 'is-active' );
@@ -165,7 +210,6 @@
  *     // from `<input type="text" length="24">`
  *     //   to `<input type="text" length="24">
  *     $tags->remove_class( 'rugby' );
- * ```
  *
  * When class changes are enqueued but a direct change to `class` is made via
  * `set_attribute` then the changes to `set_attribute` (or `remove_attribute`)
@@ -184,7 +228,6 @@
  * and so on. It's fine from a performance standpoint to create a
  * bookmark and update it frequently, such as within a loop.
  *
- * ```php
  *     $total_todos = 0;
  *     while ( $p->next_tag( array( 'tag_name' => 'UL', 'class_name' => 'todo' ) ) ) {
  *         $p->set_bookmark( 'list-start' );
@@ -203,7 +246,6 @@
  *             }
  *         }
  *     }
- * ```
  *
  * ## Design and limitations
  *
@@ -229,11 +271,11 @@
  * The Tag Processor's design incorporates a "garbage-in-garbage-out" philosophy.
  * HTML5 specifies that certain invalid content be transformed into different forms
  * for display, such as removing null bytes from an input document and replacing
- * invalid characters with the Unicode replacement character U+FFFD �. Where errors
- * or transformations exist within the HTML5 specification, the Tag Processor leaves
- * those invalid inputs untouched, passing them through to the final browser to handle.
- * While this implies that certain operations will be non-spec-compliant, such as
- * reading the value of an attribute with invalid content, it also preserves a
+ * invalid characters with the Unicode replacement character `U+FFFD` (visually "�").
+ * Where errors or transformations exist within the HTML5 specification, the Tag Processor
+ * leaves those invalid inputs untouched, passing them through to the final browser
+ * to handle. While this implies that certain operations will be non-spec-compliant,
+ * such as reading the value of an attribute with invalid content, it also preserves a
  * simplicity and efficiency for handling those error cases.
  *
  * Most operations within the Tag Processor are designed to minimize the difference
@@ -246,16 +288,49 @@
  * double-quoted strings, meaning that attributes on input with single-quoted or
  * unquoted values will appear in the output with double-quotes.
  *
+ * ### Scripting Flag
+ *
+ * The Tag Processor parses HTML with the "scripting flag" disabled. This means
+ * that it doesn't run any scripts while parsing the page. In a browser with
+ * JavaScript enabled, for example, the script can change the parse of the
+ * document as it loads. On the server, however, evaluating JavaScript is not
+ * only impractical, but also unwanted.
+ *
+ * Practically this means that the Tag Processor will descend into NOSCRIPT
+ * elements and process its child tags. Were the scripting flag enabled, such
+ * as in a typical browser, the contents of NOSCRIPT are skipped entirely.
+ *
+ * This allows the HTML API to process the content that will be presented in
+ * a browser when scripting is disabled, but it offers a different view of a
+ * page than most browser sessions will experience. E.g. the tags inside the
+ * NOSCRIPT disappear.
+ *
+ * ### Text Encoding
+ *
+ * The Tag Processor assumes that the input HTML document is encoded with a
+ * text encoding compatible with 7-bit ASCII's '<', '>', '&', ';', '/', '=',
+ * "'", '"', 'a' - 'z', 'A' - 'Z', and the whitespace characters ' ', tab,
+ * carriage-return, newline, and form-feed.
+ *
+ * In practice, this includes almost every single-byte encoding as well as
+ * UTF-8. Notably, however, it does not include UTF-16. If providing input
+ * that's incompatible, then convert the encoding beforehand.
+ *
  * @since 6.2.0
+ * @since 6.2.1 Fix: Support for various invalid comments; attribute updates are case-insensitive.
+ * @since 6.3.2 Fix: Skip HTML-like content inside rawtext elements such as STYLE.
+ * @since 6.5.0 Pauses processor when input ends in an incomplete syntax token.
+ *              Introduces "special" elements which act like void elements, e.g. STYLE.
  */
 class WP_HTML_Tag_Processor {
 	/**
 	 * The maximum number of bookmarks allowed to exist at
 	 * any given time.
 	 *
-	 * @see set_bookmark()
 	 * @since 6.2.0
 	 * @var int
+	 *
+	 * @see WP_HTML_Tag_Processor::set_bookmark()
 	 */
 	const MAX_BOOKMARKS = 10;
 
@@ -263,9 +338,10 @@ class WP_HTML_Tag_Processor {
 	 * Maximum number of times seek() can be called.
 	 * Prevents accidental infinite loops.
 	 *
-	 * @see seek()
 	 * @since 6.2.0
 	 * @var int
+	 *
+	 * @see WP_HTML_Tag_Processor::seek()
 	 */
 	const MAX_SEEK_OPS = 1000;
 
@@ -318,21 +394,25 @@ class WP_HTML_Tag_Processor {
 	private $stop_on_tag_closers;
 
 	/**
-	 * Holds updated HTML as updates are applied.
+	 * Specifies mode of operation of the parser at any given time.
 	 *
-	 * Updates and unmodified portions of the input document are
-	 * appended to this value as they are applied. It will hold
-	 * a copy of the updated document up until the point of the
-	 * latest applied update. The fully-updated HTML document
-	 * will comprise this value plus the part of the input document
-	 * which follows that latest update.
+	 * | State         | Meaning                                                              |
+	 * | --------------|----------------------------------------------------------------------|
+	 * | *Ready*       | The parser is ready to run.                                          |
+	 * | *Complete*    | There is nothing left to parse.                                      |
+	 * | *Incomplete*  | The HTML ended in the middle of a token; nothing more can be parsed. |
+	 * | *Matched tag* | Found an HTML tag; it's possible to modify its attributes.           |
 	 *
-	 * @see $bytes_already_copied
+	 * @since 6.5.0
 	 *
-	 * @since 6.2.0
+	 * @see WP_HTML_Tag_Processor::STATE_READY
+	 * @see WP_HTML_Tag_Processor::STATE_COMPLETE
+	 * @see WP_HTML_Tag_Processor::STATE_INCOMPLETE
+	 * @see WP_HTML_Tag_Processor::STATE_MATCHED_TAG
+	 *
 	 * @var string
 	 */
-	private $output_buffer = '';
+	private $parser_state = self::STATE_READY;
 
 	/**
 	 * How many bytes from the original HTML document have been read and parsed.
@@ -347,33 +427,50 @@ class WP_HTML_Tag_Processor {
 	private $bytes_already_parsed = 0;
 
 	/**
-	 * How many bytes from the input HTML document have already been
-	 * copied into the output buffer.
+	 * Byte offset in input document where current token starts.
 	 *
-	 * Lexical updates are enqueued and processed in batches. Prior
-	 * to any given update in the input document, there might exist
-	 * a span of HTML unaffected by any changes. This span ought to
-	 * be copied verbatim into the output buffer before applying the
-	 * following update. This value will point to the starting byte
-	 * offset in the input document where that unaffected span of
-	 * HTML starts.
+	 * Example:
 	 *
-	 * @since 6.2.0
-	 * @var int
+	 *     <div id="test">...
+	 *     01234
+	 *     - token starts at 0
+	 *
+	 * @since 6.5.0
+	 *
+	 * @var int|null
 	 */
-	private $bytes_already_copied = 0;
+	private $token_starts_at;
+
+	/**
+	 * Byte length of current token.
+	 *
+	 * Example:
+	 *
+	 *     <div id="test">...
+	 *     012345678901234
+	 *     - token length is 14 - 0 = 14
+	 *
+	 *     a <!-- comment --> is a token.
+	 *     0123456789 123456789 123456789
+	 *     - token length is 17 - 2 = 15
+	 *
+	 * @since 6.5.0
+	 *
+	 * @var int|null
+	 */
+	private $token_length;
 
 	/**
 	 * Byte offset in input document where current tag name starts.
 	 *
 	 * Example:
-	 * ```
-	 *   <div id="test">...
-	 *   01234
-	 *    - tag name starts at 1
-	 * ```
+	 *
+	 *     <div id="test">...
+	 *     01234
+	 *      - tag name starts at 1
 	 *
 	 * @since 6.2.0
+	 *
 	 * @var int|null
 	 */
 	private $tag_name_starts_at;
@@ -382,32 +479,16 @@ class WP_HTML_Tag_Processor {
 	 * Byte length of current tag name.
 	 *
 	 * Example:
-	 * ```
-	 *   <div id="test">...
-	 *   01234
-	 *    --- tag name length is 3
-	 * ```
+	 *
+	 *     <div id="test">...
+	 *     01234
+	 *      --- tag name length is 3
 	 *
 	 * @since 6.2.0
+	 *
 	 * @var int|null
 	 */
 	private $tag_name_length;
-
-	/**
-	 * Byte offset in input document where current tag token ends.
-	 *
-	 * Example:
-	 * ```
-	 *   <div id="test">...
-	 *   0         1   |
-	 *   01234567890123456
-	 *    --- tag name ends at 14
-	 * ```
-	 *
-	 * @since 6.2.0
-	 * @var int|null
-	 */
-	private $tag_ends_at;
 
 	/**
 	 * Whether the current tag is an opening tag, e.g. <div>, or a closing tag, e.g. </div>.
@@ -420,30 +501,39 @@ class WP_HTML_Tag_Processor {
 	 * Lazily-built index of attributes found within an HTML tag, keyed by the attribute name.
 	 *
 	 * Example:
-	 * ```php
-	 *     // supposing the parser is working through this content
-	 *     // and stops after recognizing the `id` attribute
+	 *
+	 *     // Supposing the parser is working through this content
+	 *     // and stops after recognizing the `id` attribute.
 	 *     // <div id="test-4" class=outline title="data:text/plain;base64=asdk3nk1j3fo8">
-	 *     //                 ^ parsing will continue from this point
+	 *     //                 ^ parsing will continue from this point.
 	 *     $this->attributes = array(
-	 *         'id' => new WP_HTML_Attribute_Match( 'id', null, 6, 17 )
+	 *         'id' => new WP_HTML_Attribute_Token( 'id', 9, 6, 5, 11, false )
 	 *     );
 	 *
-	 *     // when picking up parsing again, or when asking to find the
-	 *     // `class` attribute we will continue and add to this array
+	 *     // When picking up parsing again, or when asking to find the
+	 *     // `class` attribute we will continue and add to this array.
 	 *     $this->attributes = array(
-	 *         'id'    => new WP_HTML_Attribute_Match( 'id', null, 6, 17 ),
-	 *         'class' => new WP_HTML_Attribute_Match( 'class', 'outline', 18, 32 )
+	 *         'id'    => new WP_HTML_Attribute_Token( 'id', 9, 6, 5, 11, false ),
+	 *         'class' => new WP_HTML_Attribute_Token( 'class', 23, 7, 17, 13, false )
 	 *     );
 	 *
 	 *     // Note that only the `class` attribute value is stored in the index.
 	 *     // That's because it is the only value used by this class at the moment.
-	 * ```
 	 *
 	 * @since 6.2.0
 	 * @var WP_HTML_Attribute_Token[]
 	 */
 	private $attributes = array();
+
+	/**
+	 * Tracks spans of duplicate attributes on a given tag, used for removing
+	 * all copies of an attribute when calling `remove_attribute()`.
+	 *
+	 * @since 6.3.2
+	 *
+	 * @var (WP_HTML_Span[])[]|null
+	 */
+	private $duplicate_attributes = null;
 
 	/**
 	 * Which class names to add or remove from a tag.
@@ -457,14 +547,13 @@ class WP_HTML_Tag_Processor {
 	 * into a single `set_attribute( 'class', $changes )` call.
 	 *
 	 * Example:
-	 * ```php
+	 *
 	 *     // Add the `wp-block-group` class, remove the `wp-group` class.
 	 *     $classname_updates = array(
-	 *         // Indexed by a comparable class name
+	 *         // Indexed by a comparable class name.
 	 *         'wp-block-group' => WP_HTML_Tag_Processor::ADD_CLASS,
 	 *         'wp-group'       => WP_HTML_Tag_Processor::REMOVE_CLASS
 	 *     );
-	 * ```
 	 *
 	 * @since 6.2.0
 	 * @var bool[]
@@ -511,18 +600,17 @@ class WP_HTML_Tag_Processor {
 	 * copies when applying many updates to a single document.
 	 *
 	 * Example:
-	 * ```php
+	 *
 	 *     // Replace an attribute stored with a new value, indices
 	 *     // sourced from the lazily-parsed HTML recognizer.
-	 *     $start = $attributes['src']->start;
-	 *     $end   = $attributes['src']->end;
-	 *     $modifications[] = new WP_HTML_Text_Replacement( $start, $end, $new_value );
+	 *     $start  = $attributes['src']->start;
+	 *     $length = $attributes['src']->length;
+	 *     $modifications[] = new WP_HTML_Text_Replacement( $start, $length, $new_value );
 	 *
 	 *     // Correspondingly, something like this will appear in this array.
 	 *     $lexical_updates = array(
 	 *         WP_HTML_Text_Replacement( 14, 28, 'https://my-site.my-domain/wp-content/uploads/2014/08/kittens.jpg' )
 	 *     );
-	 * ```
 	 *
 	 * @since 6.2.0
 	 * @var WP_HTML_Text_Replacement[]
@@ -532,9 +620,10 @@ class WP_HTML_Tag_Processor {
 	/**
 	 * Tracks and limits `seek()` calls to prevent accidental infinite loops.
 	 *
-	 * @see seek
 	 * @since 6.2.0
 	 * @var int
+	 *
+	 * @see WP_HTML_Tag_Processor::seek()
 	 */
 	protected $seek_count = 0;
 
@@ -553,6 +642,7 @@ class WP_HTML_Tag_Processor {
 	 * Finds the next tag matching the $query.
 	 *
 	 * @since 6.2.0
+	 * @since 6.5.0 No longer processes incomplete tokens at end of document; pauses the processor at start of token.
 	 *
 	 * @param array|string|null $query {
 	 *     Optional. Which tag name to find, having which class, etc. Default is to find any tag.
@@ -564,65 +654,274 @@ class WP_HTML_Tag_Processor {
 	 *     @type string|null $class_name   Tag must contain this whole class name to match.
 	 *     @type string|null $tag_closers  "visit" or "skip": whether to stop on tag closers, e.g. </div>.
 	 * }
-	 * @return boolean Whether a tag was matched.
+	 * @return bool Whether a tag was matched.
 	 */
 	public function next_tag( $query = null ) {
 		$this->parse_query( $query );
 		$already_found = 0;
 
 		do {
-			if ( $this->bytes_already_parsed >= strlen( $this->html ) ) {
+			if ( false === $this->next_token() ) {
 				return false;
 			}
 
-			// Find the next tag if it exists.
-			if ( false === $this->parse_next_tag() ) {
-				$this->bytes_already_parsed = strlen( $this->html );
-
-				return false;
-			}
-
-			// Parse all of its attributes.
-			while ( $this->parse_next_attribute() ) {
+			if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
 				continue;
 			}
 
-			// Ensure that the tag closes before the end of the document.
-			$tag_ends_at = strpos( $this->html, '>', $this->bytes_already_parsed );
-			if ( false === $tag_ends_at ) {
-				return false;
-			}
-			$this->tag_ends_at          = $tag_ends_at;
-			$this->bytes_already_parsed = $tag_ends_at;
-
-			// Finally, check if the parsed tag and its attributes match the search query.
 			if ( $this->matches() ) {
 				++$already_found;
-			}
-
-			/*
-			 * For non-DATA sections which might contain text that looks like HTML tags but
-			 * isn't, scan with the appropriate alternative mode. Looking at the first letter
-			 * of the tag name as a pre-check avoids a string allocation when it's not needed.
-			 */
-			$t = $this->html[ $this->tag_name_starts_at ];
-			if ( ! $this->is_closing_tag && ( 's' === $t || 'S' === $t || 't' === $t || 'T' === $t ) ) {
-				$tag_name = $this->get_tag();
-
-				if ( 'SCRIPT' === $tag_name && ! $this->skip_script_data() ) {
-					$this->bytes_already_parsed = strlen( $this->html );
-					return false;
-				} elseif (
-					( 'TEXTAREA' === $tag_name || 'TITLE' === $tag_name ) &&
-					! $this->skip_rcdata( $tag_name )
-				) {
-					$this->bytes_already_parsed = strlen( $this->html );
-					return false;
-				}
 			}
 		} while ( $already_found < $this->sought_match_offset );
 
 		return true;
+	}
+
+	/**
+	 * Finds the next token in the HTML document.
+	 *
+	 * An HTML document can be viewed as a stream of tokens,
+	 * where tokens are things like HTML tags, HTML comments,
+	 * text nodes, etc. This method finds the next token in
+	 * the HTML document and returns whether it found one.
+	 *
+	 * If it starts parsing a token and reaches the end of the
+	 * document then it will seek to the start of the last
+	 * token and pause, returning `false` to indicate that it
+	 * failed to find a complete token.
+	 *
+	 * Possible token types, based on the HTML specification:
+	 *
+	 *  - an HTML tag, whether opening, closing, or void.
+	 *  - a text node - the plaintext inside tags.
+	 *  - an HTML comment.
+	 *  - a DOCTYPE declaration.
+	 *  - a processing instruction, e.g. `<?xml version="1.0" ?>`.
+	 *
+	 * The Tag Processor currently only supports the tag token.
+	 *
+	 * @since 6.5.0
+	 *
+	 * @return bool Whether a token was parsed.
+	 */
+	public function next_token() {
+		$this->get_updated_html();
+		$was_at = $this->bytes_already_parsed;
+
+		// Don't proceed if there's nothing more to scan.
+		if (
+			self::STATE_COMPLETE === $this->parser_state ||
+			self::STATE_INCOMPLETE === $this->parser_state
+		) {
+			return false;
+		}
+
+		/*
+		 * The next step in the parsing loop determines the parsing state;
+		 * clear it so that state doesn't linger from the previous step.
+		 */
+		$this->parser_state = self::STATE_READY;
+
+		if ( $this->bytes_already_parsed >= strlen( $this->html ) ) {
+			$this->parser_state = self::STATE_COMPLETE;
+			return false;
+		}
+
+		// Find the next tag if it exists.
+		if ( false === $this->parse_next_tag() ) {
+			if ( self::STATE_INCOMPLETE === $this->parser_state ) {
+				$this->bytes_already_parsed = $was_at;
+			}
+
+			return false;
+		}
+
+		// Parse all of its attributes.
+		while ( $this->parse_next_attribute() ) {
+			continue;
+		}
+
+		// Ensure that the tag closes before the end of the document.
+		if (
+			self::STATE_INCOMPLETE === $this->parser_state ||
+			$this->bytes_already_parsed >= strlen( $this->html )
+		) {
+			// Does this appropriately clear state (parsed attributes)?
+			$this->parser_state         = self::STATE_INCOMPLETE;
+			$this->bytes_already_parsed = $was_at;
+
+			return false;
+		}
+
+		$tag_ends_at = strpos( $this->html, '>', $this->bytes_already_parsed );
+		if ( false === $tag_ends_at ) {
+			$this->parser_state         = self::STATE_INCOMPLETE;
+			$this->bytes_already_parsed = $was_at;
+
+			return false;
+		}
+		$this->parser_state         = self::STATE_MATCHED_TAG;
+		$this->token_length         = $tag_ends_at - $this->token_starts_at;
+		$this->bytes_already_parsed = $tag_ends_at;
+
+		/*
+		 * For non-DATA sections which might contain text that looks like HTML tags but
+		 * isn't, scan with the appropriate alternative mode. Looking at the first letter
+		 * of the tag name as a pre-check avoids a string allocation when it's not needed.
+		 */
+		$t = $this->html[ $this->tag_name_starts_at ];
+		if (
+			! $this->is_closing_tag &&
+			(
+				'i' === $t || 'I' === $t ||
+				'n' === $t || 'N' === $t ||
+				's' === $t || 'S' === $t ||
+				't' === $t || 'T' === $t ||
+				'x' === $t || 'X' === $t
+			)
+		) {
+			$tag_name = $this->get_tag();
+
+			if ( 'SCRIPT' === $tag_name && ! $this->skip_script_data() ) {
+				$this->parser_state         = self::STATE_INCOMPLETE;
+				$this->bytes_already_parsed = $was_at;
+
+				return false;
+			} elseif (
+				( 'TEXTAREA' === $tag_name || 'TITLE' === $tag_name ) &&
+				! $this->skip_rcdata( $tag_name )
+			) {
+				$this->parser_state         = self::STATE_INCOMPLETE;
+				$this->bytes_already_parsed = $was_at;
+
+				return false;
+			} elseif (
+				(
+					'IFRAME' === $tag_name ||
+					'NOEMBED' === $tag_name ||
+					'NOFRAMES' === $tag_name ||
+					'STYLE' === $tag_name ||
+					'XMP' === $tag_name
+				) &&
+				! $this->skip_rawtext( $tag_name )
+			) {
+				$this->parser_state         = self::STATE_INCOMPLETE;
+				$this->bytes_already_parsed = $was_at;
+
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Whether the processor paused because the input HTML document ended
+	 * in the middle of a syntax element, such as in the middle of a tag.
+	 *
+	 * Example:
+	 *
+	 *     $processor = new WP_HTML_Tag_Processor( '<input type="text" value="Th' );
+	 *     false      === $processor->get_next_tag();
+	 *     true       === $processor->paused_at_incomplete_token();
+	 *
+	 * @since 6.5.0
+	 *
+	 * @return bool Whether the parse paused at the start of an incomplete token.
+	 */
+	public function paused_at_incomplete_token() {
+		return self::STATE_INCOMPLETE === $this->parser_state;
+	}
+
+	/**
+	 * Generator for a foreach loop to step through each class name for the matched tag.
+	 *
+	 * This generator function is designed to be used inside a "foreach" loop.
+	 *
+	 * Example:
+	 *
+	 *     $p = new WP_HTML_Tag_Processor( "<div class='free &lt;egg&lt;\tlang-en'>" );
+	 *     $p->next_tag();
+	 *     foreach ( $p->class_list() as $class_name ) {
+	 *         echo "{$class_name} ";
+	 *     }
+	 *     // Outputs: "free <egg> lang-en "
+	 *
+	 * @since 6.4.0
+	 */
+	public function class_list() {
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
+			return;
+		}
+
+		/** @var string $class contains the string value of the class attribute, with character references decoded. */
+		$class = $this->get_attribute( 'class' );
+
+		if ( ! is_string( $class ) ) {
+			return;
+		}
+
+		$seen = array();
+
+		$at = 0;
+		while ( $at < strlen( $class ) ) {
+			// Skip past any initial boundary characters.
+			$at += strspn( $class, " \t\f\r\n", $at );
+			if ( $at >= strlen( $class ) ) {
+				return;
+			}
+
+			// Find the byte length until the next boundary.
+			$length = strcspn( $class, " \t\f\r\n", $at );
+			if ( 0 === $length ) {
+				return;
+			}
+
+			/*
+			 * CSS class names are case-insensitive in the ASCII range.
+			 *
+			 * @see https://www.w3.org/TR/CSS2/syndata.html#x1
+			 */
+			$name = strtolower( substr( $class, $at, $length ) );
+			$at  += $length;
+
+			/*
+			 * It's expected that the number of class names for a given tag is relatively small.
+			 * Given this, it is probably faster overall to scan an array for a value rather
+			 * than to use the class name as a key and check if it's a key of $seen.
+			 */
+			if ( in_array( $name, $seen, true ) ) {
+				continue;
+			}
+
+			$seen[] = $name;
+			yield $name;
+		}
+	}
+
+
+	/**
+	 * Returns if a matched tag contains the given ASCII case-insensitive class name.
+	 *
+	 * @since 6.4.0
+	 *
+	 * @param string $wanted_class Look for this CSS class name, ASCII case-insensitive.
+	 * @return bool|null Whether the matched tag contains the given class name, or null if not matched.
+	 */
+	public function has_class( $wanted_class ) {
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
+			return null;
+		}
+
+		$wanted_class = strtolower( $wanted_class );
+
+		foreach ( $this->class_list() as $class_name ) {
+			if ( $class_name === $wanted_class ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 
@@ -639,7 +938,7 @@ class WP_HTML_Tag_Processor {
 	 * Release bookmarks when they are no longer needed.
 	 *
 	 * Example:
-	 * ```
+	 *
 	 *     <main><h2>Surprising fact you may not know!</h2></main>
 	 *           ^  ^
 	 *            \-|-- this `H2` opener bookmark tracks the token
@@ -647,14 +946,13 @@ class WP_HTML_Tag_Processor {
 	 *     <main class="clickbait"><h2>Surprising fact you may no…
 	 *                             ^  ^
 	 *                              \-|-- it shifts with edits
-	 * ```
 	 *
 	 * Bookmarks provide the ability to seek to a previously-scanned
 	 * place in the HTML document. This avoids the need to re-scan
 	 * the entire document.
 	 *
 	 * Example:
-	 * ```
+	 *
 	 *     <ul><li>One</li><li>Two</li><li>Three</li></ul>
 	 *                                 ^^^^
 	 *                                 want to note this last item
@@ -681,7 +979,6 @@ class WP_HTML_Tag_Processor {
 	 *             $p->set_bookmark( 'last-li' );
 	 *         }
 	 *     }
-	 * ```
 	 *
 	 * Bookmarks intentionally hide the internal string offsets
 	 * to which they refer. They are maintained internally as
@@ -709,11 +1006,12 @@ class WP_HTML_Tag_Processor {
 	 * @return bool Whether the bookmark was successfully created.
 	 */
 	public function set_bookmark( $name ) {
-		if ( null === $this->tag_name_starts_at ) {
+		// It only makes sense to set a bookmark if the parser has paused on a concrete token.
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
 			return false;
 		}
 
-		if ( ! array_key_exists( $name, $this->bookmarks ) && count( $this->bookmarks ) >= self::MAX_BOOKMARKS ) {
+		if ( ! array_key_exists( $name, $this->bookmarks ) && count( $this->bookmarks ) >= static::MAX_BOOKMARKS ) {
 			_doing_it_wrong(
 				__METHOD__,
 				__( 'Too many bookmarks: cannot create any more.' ),
@@ -722,10 +1020,7 @@ class WP_HTML_Tag_Processor {
 			return false;
 		}
 
-		$this->bookmarks[ $name ] = new WP_HTML_Span(
-			$this->tag_name_starts_at - ( $this->is_closing_tag ? 2 : 1 ),
-			$this->tag_ends_at
-		);
+		$this->bookmarks[ $name ] = new WP_HTML_Span( $this->token_starts_at, $this->token_length );
 
 		return true;
 	}
@@ -750,14 +1045,33 @@ class WP_HTML_Tag_Processor {
 		return true;
 	}
 
+	/**
+	 * Skips contents of generic rawtext elements.
+	 *
+	 * @since 6.3.2
+	 *
+	 * @see https://html.spec.whatwg.org/#generic-raw-text-element-parsing-algorithm
+	 *
+	 * @param string $tag_name The uppercase tag name which will close the RAWTEXT region.
+	 * @return bool Whether an end to the RAWTEXT region was found before the end of the document.
+	 */
+	private function skip_rawtext( $tag_name ) {
+		/*
+		 * These two functions distinguish themselves on whether character references are
+		 * decoded, and since functionality to read the inner markup isn't supported, it's
+		 * not necessary to implement these two functions separately.
+		 */
+		return $this->skip_rcdata( $tag_name );
+	}
 
 	/**
-	 * Skips contents of title and textarea tags.
+	 * Skips contents of RCDATA elements, namely title and textarea tags.
 	 *
-	 * @see https://html.spec.whatwg.org/multipage/parsing.html#rcdata-state
 	 * @since 6.2.0
 	 *
-	 * @param string $tag_name – the lowercase tag name which will close the RCDATA region.
+	 * @see https://html.spec.whatwg.org/multipage/parsing.html#rcdata-state
+	 *
+	 * @param string $tag_name The uppercase tag name which will close the RCDATA region.
 	 * @return bool Whether an end to the RCDATA region was found before the end of the document.
 	 */
 	private function skip_rcdata( $tag_name ) {
@@ -770,9 +1084,8 @@ class WP_HTML_Tag_Processor {
 		while ( false !== $at && $at < $doc_length ) {
 			$at = strpos( $this->html, '</', $at );
 
-			// If there is no possible tag closer then fail.
+			// Fail if there is no possible tag closer.
 			if ( false === $at || ( $at + $tag_length ) >= $doc_length ) {
-				$this->bytes_already_parsed = $doc_length;
 				return false;
 			}
 
@@ -799,6 +1112,10 @@ class WP_HTML_Tag_Processor {
 
 			$at                        += $tag_length;
 			$this->bytes_already_parsed = $at;
+
+			if ( $at >= strlen( $html ) ) {
+				return false;
+			}
 
 			/*
 			 * Ensure that the tag name terminates to avoid matching on
@@ -950,6 +1267,12 @@ class WP_HTML_Tag_Processor {
 					continue;
 				}
 
+				if ( $this->bytes_already_parsed >= $doc_length ) {
+					$this->parser_state = self::STATE_INCOMPLETE;
+
+					return false;
+				}
+
 				if ( '>' === $html[ $this->bytes_already_parsed ] ) {
 					$this->bytes_already_parsed = $closer_potentially_starts_at;
 					return true;
@@ -971,6 +1294,7 @@ class WP_HTML_Tag_Processor {
 	 * closing `>`; these are left for other methods.
 	 *
 	 * @since 6.2.0
+	 * @since 6.2.1 Support abruptly-closed comments, invalid-tag-closer-comments, and empty elements.
 	 *
 	 * @return bool Whether a tag was found before the end of the document.
 	 */
@@ -983,13 +1307,20 @@ class WP_HTML_Tag_Processor {
 
 		while ( false !== $at && $at < $doc_length ) {
 			$at = strpos( $html, '<', $at );
+
+			/*
+			 * This does not imply an incomplete parse; it indicates that there
+			 * can be nothing left in the document other than a #text node.
+			 */
 			if ( false === $at ) {
 				return false;
 			}
 
-			if ( '/' === $this->html[ $at + 1 ] ) {
+			$this->token_starts_at = $at;
+
+			if ( $at + 1 < $doc_length && '/' === $this->html[ $at + 1 ] ) {
 				$this->is_closing_tag = true;
-				$at++;
+				++$at;
 			} else {
 				$this->is_closing_tag = false;
 			}
@@ -1021,7 +1352,9 @@ class WP_HTML_Tag_Processor {
 			 * Abort if no tag is found before the end of
 			 * the document. There is nothing left to parse.
 			 */
-			if ( $at + 1 >= strlen( $html ) ) {
+			if ( $at + 1 >= $doc_length ) {
+				$this->parser_state = self::STATE_INCOMPLETE;
+
 				return false;
 			}
 
@@ -1035,17 +1368,50 @@ class WP_HTML_Tag_Processor {
 				 * https://html.spec.whatwg.org/multipage/parsing.html#tag-open-state
 				 */
 				if (
-					strlen( $html ) > $at + 3 &&
+					$doc_length > $at + 3 &&
 					'-' === $html[ $at + 2 ] &&
 					'-' === $html[ $at + 3 ]
 				) {
-					$closer_at = strpos( $html, '-->', $at + 4 );
-					if ( false === $closer_at ) {
+					$closer_at = $at + 4;
+					// If it's not possible to close the comment then there is nothing more to scan.
+					if ( $doc_length <= $closer_at ) {
+						$this->parser_state = self::STATE_INCOMPLETE;
+
 						return false;
 					}
 
-					$at = $closer_at + 3;
-					continue;
+					// Abruptly-closed empty comments are a sequence of dashes followed by `>`.
+					$span_of_dashes = strspn( $html, '-', $closer_at );
+					if ( '>' === $html[ $closer_at + $span_of_dashes ] ) {
+						$at = $closer_at + $span_of_dashes + 1;
+						continue;
+					}
+
+					/*
+					 * Comments may be closed by either a --> or an invalid --!>.
+					 * The first occurrence closes the comment.
+					 *
+					 * See https://html.spec.whatwg.org/#parse-error-incorrectly-closed-comment
+					 */
+					--$closer_at; // Pre-increment inside condition below reduces risk of accidental infinite looping.
+					while ( ++$closer_at < $doc_length ) {
+						$closer_at = strpos( $html, '--', $closer_at );
+						if ( false === $closer_at ) {
+							$this->parser_state = self::STATE_INCOMPLETE;
+
+							return false;
+						}
+
+						if ( $closer_at + 2 < $doc_length && '>' === $html[ $closer_at + 2 ] ) {
+							$at = $closer_at + 3;
+							continue 2;
+						}
+
+						if ( $closer_at + 3 < $doc_length && '!' === $html[ $closer_at + 2 ] && '>' === $html[ $closer_at + 3 ] ) {
+							$at = $closer_at + 4;
+							continue 2;
+						}
+					}
 				}
 
 				/*
@@ -1054,7 +1420,7 @@ class WP_HTML_Tag_Processor {
 				 * https://html.spec.whatwg.org/multipage/parsing.html#tag-open-state
 				 */
 				if (
-					strlen( $html ) > $at + 8 &&
+					$doc_length > $at + 8 &&
 					'[' === $html[ $at + 2 ] &&
 					'C' === $html[ $at + 3 ] &&
 					'D' === $html[ $at + 4 ] &&
@@ -1065,6 +1431,8 @@ class WP_HTML_Tag_Processor {
 				) {
 					$closer_at = strpos( $html, ']]>', $at + 9 );
 					if ( false === $closer_at ) {
+						$this->parser_state = self::STATE_INCOMPLETE;
+
 						return false;
 					}
 
@@ -1078,7 +1446,7 @@ class WP_HTML_Tag_Processor {
 				 * https://html.spec.whatwg.org/multipage/parsing.html#tag-open-state
 				 */
 				if (
-					strlen( $html ) > $at + 8 &&
+					$doc_length > $at + 8 &&
 					( 'D' === $html[ $at + 2 ] || 'd' === $html[ $at + 2 ] ) &&
 					( 'O' === $html[ $at + 3 ] || 'o' === $html[ $at + 3 ] ) &&
 					( 'C' === $html[ $at + 4 ] || 'c' === $html[ $at + 4 ] ) &&
@@ -1089,6 +1457,8 @@ class WP_HTML_Tag_Processor {
 				) {
 					$closer_at = strpos( $html, '>', $at + 9 );
 					if ( false === $closer_at ) {
+						$this->parser_state = self::STATE_INCOMPLETE;
+
 						return false;
 					}
 
@@ -1098,19 +1468,65 @@ class WP_HTML_Tag_Processor {
 
 				/*
 				 * Anything else here is an incorrectly-opened comment and transitions
-				 * to the bogus comment state - skip to the nearest >.
+				 * to the bogus comment state - skip to the nearest >. If no closer is
+				 * found then the HTML was truncated inside the markup declaration.
 				 */
 				$at = strpos( $html, '>', $at + 1 );
+				if ( false === $at ) {
+					$this->parser_state = self::STATE_INCOMPLETE;
+
+					return false;
+				}
+
+				continue;
+			}
+
+			/*
+			 * </> is a missing end tag name, which is ignored.
+			 *
+			 * This was also known as the "presumptuous empty tag"
+			 * in early discussions as it was proposed to close
+			 * the nearest previous opening tag.
+			 *
+			 * See https://html.spec.whatwg.org/#parse-error-missing-end-tag-name
+			 */
+			if ( '>' === $html[ $at + 1 ] ) {
+				++$at;
 				continue;
 			}
 
 			/*
 			 * <? transitions to a bogus comment state – skip to the nearest >
-			 * https://html.spec.whatwg.org/multipage/parsing.html#tag-open-state
+			 * See https://html.spec.whatwg.org/multipage/parsing.html#tag-open-state
 			 */
 			if ( '?' === $html[ $at + 1 ] ) {
 				$closer_at = strpos( $html, '>', $at + 2 );
 				if ( false === $closer_at ) {
+					$this->parser_state = self::STATE_INCOMPLETE;
+
+					return false;
+				}
+
+				$at = $closer_at + 1;
+				continue;
+			}
+
+			/*
+			 * If a non-alpha starts the tag name in a tag closer it's a comment.
+			 * Find the first `>`, which closes the comment.
+			 *
+			 * See https://html.spec.whatwg.org/#parse-error-invalid-first-character-of-tag-name
+			 */
+			if ( $this->is_closing_tag ) {
+				// No chance of finding a closer.
+				if ( $at + 3 > $doc_length ) {
+					return false;
+				}
+
+				$closer_at = strpos( $html, '>', $at + 3 );
+				if ( false === $closer_at ) {
+					$this->parser_state = self::STATE_INCOMPLETE;
+
 					return false;
 				}
 
@@ -1135,6 +1551,8 @@ class WP_HTML_Tag_Processor {
 		// Skip whitespace and slashes.
 		$this->bytes_already_parsed += strspn( $this->html, " \t\f\r\n/", $this->bytes_already_parsed );
 		if ( $this->bytes_already_parsed >= strlen( $this->html ) ) {
+			$this->parser_state = self::STATE_INCOMPLETE;
+
 			return false;
 		}
 
@@ -1157,11 +1575,15 @@ class WP_HTML_Tag_Processor {
 		$attribute_name              = substr( $this->html, $attribute_start, $name_length );
 		$this->bytes_already_parsed += $name_length;
 		if ( $this->bytes_already_parsed >= strlen( $this->html ) ) {
+			$this->parser_state = self::STATE_INCOMPLETE;
+
 			return false;
 		}
 
 		$this->skip_whitespace();
 		if ( $this->bytes_already_parsed >= strlen( $this->html ) ) {
+			$this->parser_state = self::STATE_INCOMPLETE;
+
 			return false;
 		}
 
@@ -1170,6 +1592,8 @@ class WP_HTML_Tag_Processor {
 			++$this->bytes_already_parsed;
 			$this->skip_whitespace();
 			if ( $this->bytes_already_parsed >= strlen( $this->html ) ) {
+				$this->parser_state = self::STATE_INCOMPLETE;
+
 				return false;
 			}
 
@@ -1196,6 +1620,8 @@ class WP_HTML_Tag_Processor {
 		}
 
 		if ( $attribute_end >= strlen( $this->html ) ) {
+			$this->parser_state = self::STATE_INCOMPLETE;
+
 			return false;
 		}
 
@@ -1220,9 +1646,28 @@ class WP_HTML_Tag_Processor {
 				$value_start,
 				$value_length,
 				$attribute_start,
-				$attribute_end,
+				$attribute_end - $attribute_start,
 				! $has_value
 			);
+
+			return true;
+		}
+
+		/*
+		 * Track the duplicate attributes so if we remove it, all disappear together.
+		 *
+		 * While `$this->duplicated_attributes` could always be stored as an `array()`,
+		 * which would simplify the logic here, storing a `null` and only allocating
+		 * an array when encountering duplicates avoids needless allocations in the
+		 * normative case of parsing tags with no duplicate attributes.
+		 */
+		$duplicate_span = new WP_HTML_Span( $attribute_start, $attribute_end - $attribute_start );
+		if ( null === $this->duplicate_attributes ) {
+			$this->duplicate_attributes = array( $comparable_name => array( $duplicate_span ) );
+		} elseif ( ! array_key_exists( $comparable_name, $this->duplicate_attributes ) ) {
+			$this->duplicate_attributes[ $comparable_name ] = array( $duplicate_span );
+		} else {
+			$this->duplicate_attributes[ $comparable_name ][] = $duplicate_span;
 		}
 
 		return true;
@@ -1232,8 +1677,6 @@ class WP_HTML_Tag_Processor {
 	 * Move the internal cursor past any immediate successive whitespace.
 	 *
 	 * @since 6.2.0
-	 *
-	 * @return void
 	 */
 	private function skip_whitespace() {
 		$this->bytes_already_parsed += strspn( $this->html, " \t\f\r\n", $this->bytes_already_parsed );
@@ -1243,29 +1686,25 @@ class WP_HTML_Tag_Processor {
 	 * Applies attribute updates and cleans up once a tag is fully parsed.
 	 *
 	 * @since 6.2.0
-	 *
-	 * @return void
 	 */
 	private function after_tag() {
-		$this->class_name_updates_to_attributes_updates();
-		$this->apply_attributes_updates();
-		$this->tag_name_starts_at = null;
-		$this->tag_name_length    = null;
-		$this->tag_ends_at        = null;
-		$this->is_closing_tag     = null;
-		$this->attributes         = array();
+		$this->token_starts_at      = null;
+		$this->token_length         = null;
+		$this->tag_name_starts_at   = null;
+		$this->tag_name_length      = null;
+		$this->is_closing_tag       = null;
+		$this->attributes           = array();
+		$this->duplicate_attributes = null;
 	}
 
 	/**
 	 * Converts class name updates into tag attributes updates
 	 * (they are accumulated in different data formats for performance).
 	 *
-	 * @see $lexical_updates
-	 * @see $classname_updates
-	 *
 	 * @since 6.2.0
 	 *
-	 * @return void
+	 * @see WP_HTML_Tag_Processor::$lexical_updates
+	 * @see WP_HTML_Tag_Processor::$classname_updates
 	 */
 	private function class_name_updates_to_attributes_updates() {
 		if ( count( $this->classname_updates ) === 0 ) {
@@ -1404,14 +1843,18 @@ class WP_HTML_Tag_Processor {
 	 * Applies attribute updates to HTML document.
 	 *
 	 * @since 6.2.0
+	 * @since 6.2.1 Accumulates shift for internal cursor and passed pointer.
 	 * @since 6.3.0 Invalidate any bookmarks whose targets are overwritten.
 	 *
-	 * @return void
+	 * @param int $shift_this_point Accumulate and return shift for this position.
+	 * @return int How many bytes the given pointer moved in response to the updates.
 	 */
-	private function apply_attributes_updates() {
+	private function apply_attributes_updates( $shift_this_point = 0 ) {
 		if ( ! count( $this->lexical_updates ) ) {
-			return;
+			return 0;
 		}
+
+		$accumulated_shift_for_given_point = 0;
 
 		/*
 		 * Attribute updates can be enqueued in any order but updates
@@ -1425,17 +1868,35 @@ class WP_HTML_Tag_Processor {
 		 */
 		usort( $this->lexical_updates, array( self::class, 'sort_start_ascending' ) );
 
+		$bytes_already_copied = 0;
+		$output_buffer        = '';
 		foreach ( $this->lexical_updates as $diff ) {
-			$this->output_buffer       .= substr( $this->html, $this->bytes_already_copied, $diff->start - $this->bytes_already_copied );
-			$this->output_buffer       .= $diff->text;
-			$this->bytes_already_copied = $diff->end;
+			$shift = strlen( $diff->text ) - $diff->length;
+
+			// Adjust the cursor position by however much an update affects it.
+			if ( $diff->start <= $this->bytes_already_parsed ) {
+				$this->bytes_already_parsed += $shift;
+			}
+
+			// Accumulate shift of the given pointer within this function call.
+			if ( $diff->start <= $shift_this_point ) {
+				$accumulated_shift_for_given_point += $shift;
+			}
+
+			$output_buffer       .= substr( $this->html, $bytes_already_copied, $diff->start - $bytes_already_copied );
+			$output_buffer       .= $diff->text;
+			$bytes_already_copied = $diff->start + $diff->length;
 		}
+
+		$this->html = $output_buffer . substr( $this->html, $bytes_already_copied );
 
 		/*
 		 * Adjust bookmark locations to account for how the text
 		 * replacements adjust offsets in the input document.
 		 */
 		foreach ( $this->bookmarks as $bookmark_name => $bookmark ) {
+			$bookmark_end = $bookmark->start + $bookmark->length;
+
 			/*
 			 * Each lexical update which appears before the bookmark's endpoints
 			 * might shift the offsets for those endpoints. Loop through each change
@@ -1446,31 +1907,35 @@ class WP_HTML_Tag_Processor {
 			$tail_delta = 0;
 
 			foreach ( $this->lexical_updates as $diff ) {
-				if ( $bookmark->start < $diff->start && $bookmark->end < $diff->start ) {
+				$diff_end = $diff->start + $diff->length;
+
+				if ( $bookmark->start < $diff->start && $bookmark_end < $diff->start ) {
 					break;
 				}
 
-				if ( $bookmark->start >= $diff->start && $bookmark->end < $diff->end ) {
+				if ( $bookmark->start >= $diff->start && $bookmark_end < $diff_end ) {
 					$this->release_bookmark( $bookmark_name );
 					continue 2;
 				}
 
-				$delta = strlen( $diff->text ) - ( $diff->end - $diff->start );
+				$delta = strlen( $diff->text ) - $diff->length;
 
 				if ( $bookmark->start >= $diff->start ) {
 					$head_delta += $delta;
 				}
 
-				if ( $bookmark->end >= $diff->end ) {
+				if ( $bookmark_end >= $diff_end ) {
 					$tail_delta += $delta;
 				}
 			}
 
-			$bookmark->start += $head_delta;
-			$bookmark->end   += $tail_delta;
+			$bookmark->start  += $head_delta;
+			$bookmark->length += $tail_delta - $head_delta;
 		}
 
 		$this->lexical_updates = array();
+
+		return $accumulated_shift_for_given_point;
 	}
 
 	/**
@@ -1506,7 +1971,7 @@ class WP_HTML_Tag_Processor {
 			return false;
 		}
 
-		if ( ++$this->seek_count > self::MAX_SEEK_OPS ) {
+		if ( ++$this->seek_count > static::MAX_SEEK_OPS ) {
 			_doing_it_wrong(
 				__METHOD__,
 				__( 'Too many calls to seek() - this can lead to performance issues.' ),
@@ -1520,8 +1985,6 @@ class WP_HTML_Tag_Processor {
 
 		// Point this tag processor before the sought tag opener and consume it.
 		$this->bytes_already_parsed = $this->bookmarks[ $bookmark_name ]->start;
-		$this->bytes_already_copied = $this->bytes_already_parsed;
-		$this->output_buffer        = substr( $this->html, 0, $this->bytes_already_copied );
 		return $this->next_tag( array( 'tag_closers' => 'visit' ) );
 	}
 
@@ -1549,7 +2012,7 @@ class WP_HTML_Tag_Processor {
 		 * This code should be unreachable, because it implies the two replacements
 		 * start at the same location and contain the same text.
 		 */
-		return $a->end - $b->end;
+		return $a->length - $b->length;
 	}
 
 	/**
@@ -1567,6 +2030,10 @@ class WP_HTML_Tag_Processor {
 	 * @return string|boolean|null Value of enqueued update if present, otherwise false.
 	 */
 	private function get_enqueued_attribute_value( $comparable_name ) {
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
+			return false;
+		}
+
 		if ( ! isset( $this->lexical_updates[ $comparable_name ] ) ) {
 			return false;
 		}
@@ -1585,10 +2052,9 @@ class WP_HTML_Tag_Processor {
 		 * or trailing whitespace, and that the casing follows the name given in `set_attribute`.
 		 *
 		 * Example:
-		 * ```
+		 *
 		 *     $p->set_attribute( 'data-TEST-id', 'update' );
 		 *     'update' === $p->get_enqueued_attribute_value( 'data-test-id' );
-		 * ```
 		 *
 		 * Detect this difference based on the absence of the `=`, which _must_ exist in any
 		 * attribute containing a value, e.g. `<input type="text" enabled />`.
@@ -1619,7 +2085,7 @@ class WP_HTML_Tag_Processor {
 	 * Returns the value of a requested attribute from a matched tag opener if that attribute exists.
 	 *
 	 * Example:
-	 * ```php
+	 *
 	 *     $p = new WP_HTML_Tag_Processor( '<div enabled class="test" data-test-id="14">Test</div>' );
 	 *     $p->next_tag( array( 'class_name' => 'test' ) ) === true;
 	 *     $p->get_attribute( 'data-test-id' ) === '14';
@@ -1628,7 +2094,6 @@ class WP_HTML_Tag_Processor {
 	 *
 	 *     $p->next_tag() === false;
 	 *     $p->get_attribute( 'class' ) === null;
-	 * ```
 	 *
 	 * @since 6.2.0
 	 *
@@ -1636,7 +2101,7 @@ class WP_HTML_Tag_Processor {
 	 * @return string|true|null Value of attribute or `null` if not available. Boolean attributes return `true`.
 	 */
 	public function get_attribute( $name ) {
-		if ( null === $this->tag_name_starts_at ) {
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
 			return null;
 		}
 
@@ -1699,25 +2164,27 @@ class WP_HTML_Tag_Processor {
 	 * > case-insensitive match for each other.
 	 *     - HTML 5 spec
 	 *
-	 * @see https://html.spec.whatwg.org/multipage/syntax.html#attributes-2:ascii-case-insensitive
-	 *
 	 * Example:
-	 * ```php
+	 *
 	 *     $p = new WP_HTML_Tag_Processor( '<div data-ENABLED class="test" DATA-test-id="14">Test</div>' );
 	 *     $p->next_tag( array( 'class_name' => 'test' ) ) === true;
 	 *     $p->get_attribute_names_with_prefix( 'data-' ) === array( 'data-enabled', 'data-test-id' );
 	 *
 	 *     $p->next_tag() === false;
 	 *     $p->get_attribute_names_with_prefix( 'data-' ) === null;
-	 * ```
 	 *
 	 * @since 6.2.0
+	 *
+	 * @see https://html.spec.whatwg.org/multipage/syntax.html#attributes-2:ascii-case-insensitive
 	 *
 	 * @param string $prefix Prefix of requested attribute names.
 	 * @return array|null List of attribute names, or `null` when no tag opener is matched.
 	 */
-	function get_attribute_names_with_prefix( $prefix ) {
-		if ( $this->is_closing_tag || null === $this->tag_name_starts_at ) {
+	public function get_attribute_names_with_prefix( $prefix ) {
+		if (
+			self::STATE_MATCHED_TAG !== $this->parser_state ||
+			$this->is_closing_tag
+		) {
 			return null;
 		}
 
@@ -1736,21 +2203,20 @@ class WP_HTML_Tag_Processor {
 	 * Returns the uppercase name of the matched tag.
 	 *
 	 * Example:
-	 * ```php
-	 *     $p = new WP_HTML_Tag_Processor( '<DIV CLASS="test">Test</DIV>' );
+	 *
+	 *     $p = new WP_HTML_Tag_Processor( '<div class="test">Test</div>' );
 	 *     $p->next_tag() === true;
 	 *     $p->get_tag() === 'DIV';
 	 *
 	 *     $p->next_tag() === false;
 	 *     $p->get_tag() === null;
-	 * ```
 	 *
 	 * @since 6.2.0
 	 *
 	 * @return string|null Name of currently matched tag in input HTML, or `null` if none found.
 	 */
 	public function get_tag() {
-		if ( null === $this->tag_name_starts_at ) {
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
 			return null;
 		}
 
@@ -1777,32 +2243,42 @@ class WP_HTML_Tag_Processor {
 	 * @return bool Whether the currently matched tag contains the self-closing flag.
 	 */
 	public function has_self_closing_flag() {
-		if ( ! $this->tag_name_starts_at ) {
+		if ( self::STATE_MATCHED_TAG !== $this->parser_state ) {
 			return false;
 		}
 
-		return '/' === $this->html[ $this->tag_ends_at - 1 ];
+		/*
+		 * The self-closing flag is the solidus at the _end_ of the tag, not the beginning.
+		 *
+		 * Example:
+		 *
+		 *     <figure />
+		 *             ^ this appears one character before the end of the closing ">".
+		 */
+		return '/' === $this->html[ $this->token_starts_at + $this->token_length - 1 ];
 	}
 
 	/**
 	 * Indicates if the current tag token is a tag closer.
 	 *
 	 * Example:
-	 * ```php
+	 *
 	 *     $p = new WP_HTML_Tag_Processor( '<div></div>' );
 	 *     $p->next_tag( array( 'tag_name' => 'div', 'tag_closers' => 'visit' ) );
 	 *     $p->is_tag_closer() === false;
 	 *
 	 *     $p->next_tag( array( 'tag_name' => 'div', 'tag_closers' => 'visit' ) );
 	 *     $p->is_tag_closer() === true;
-	 * ```
 	 *
 	 * @since 6.2.0
 	 *
 	 * @return bool Whether the current tag is a tag closer.
 	 */
 	public function is_tag_closer() {
-		return $this->is_closing_tag;
+		return (
+			self::STATE_MATCHED_TAG === $this->parser_state &&
+			$this->is_closing_tag
+		);
 	}
 
 	/**
@@ -1815,13 +2291,17 @@ class WP_HTML_Tag_Processor {
 	 * For string attributes, the value is escaped using the `esc_attr` function.
 	 *
 	 * @since 6.2.0
+	 * @since 6.2.1 Fix: Only create a single update for multiple calls with case-variant attribute names.
 	 *
 	 * @param string      $name  The attribute name to target.
 	 * @param string|bool $value The new attribute value.
 	 * @return bool Whether an attribute value was set.
 	 */
 	public function set_attribute( $name, $value ) {
-		if ( $this->is_closing_tag || null === $this->tag_name_starts_at ) {
+		if (
+			self::STATE_MATCHED_TAG !== $this->parser_state ||
+			$this->is_closing_tag
+		) {
 			return false;
 		}
 
@@ -1841,8 +2321,8 @@ class WP_HTML_Tag_Processor {
 		 *
 		 * @see https://html.spec.whatwg.org/#attributes-2
 		 *
-		 * @TODO as the only regex pattern maybe we should take it out? are
-		 *       Unicode patterns available broadly in Core?
+		 * @todo As the only regex pattern maybe we should take it out?
+		 *       Are Unicode patterns available broadly in Core?
 		 */
 		if ( preg_match(
 			'~[' .
@@ -1900,17 +2380,18 @@ class WP_HTML_Tag_Processor {
 			 * Update an existing attribute.
 			 *
 			 * Example – set attribute id to "new" in <div id="initial_id" />:
-			 *    <div id="initial_id"/>
-			 *         ^-------------^
-			 *         start         end
-			 *    replacement: `id="new"`
 			 *
-			 *    Result: <div id="new"/>
+			 *     <div id="initial_id"/>
+			 *          ^-------------^
+			 *          start         end
+			 *     replacement: `id="new"`
+			 *
+			 *     Result: <div id="new"/>
 			 */
-			$existing_attribute             = $this->attributes[ $comparable_name ];
-			$this->lexical_updates[ $name ] = new WP_HTML_Text_Replacement(
+			$existing_attribute                        = $this->attributes[ $comparable_name ];
+			$this->lexical_updates[ $comparable_name ] = new WP_HTML_Text_Replacement(
 				$existing_attribute->start,
-				$existing_attribute->end,
+				$existing_attribute->length,
 				$updated_attribute
 			);
 		} else {
@@ -1918,16 +2399,17 @@ class WP_HTML_Tag_Processor {
 			 * Create a new attribute at the tag's name end.
 			 *
 			 * Example – add attribute id="new" to <div />:
-			 *    <div/>
-			 *        ^
-			 *        start and end
-			 *    replacement: ` id="new"`
 			 *
-			 *    Result: <div id="new"/>
+			 *     <div/>
+			 *         ^
+			 *         start and end
+			 *     replacement: ` id="new"`
+			 *
+			 *     Result: <div id="new"/>
 			 */
 			$this->lexical_updates[ $comparable_name ] = new WP_HTML_Text_Replacement(
 				$this->tag_name_starts_at + $this->tag_name_length,
-				$this->tag_name_starts_at + $this->tag_name_length,
+				0,
 				' ' . $updated_attribute
 			);
 		}
@@ -1952,7 +2434,10 @@ class WP_HTML_Tag_Processor {
 	 * @return bool Whether an attribute was removed.
 	 */
 	public function remove_attribute( $name ) {
-		if ( $this->is_closing_tag ) {
+		if (
+			self::STATE_MATCHED_TAG !== $this->parser_state ||
+			$this->is_closing_tag
+		) {
 			return false;
 		}
 
@@ -2002,9 +2487,20 @@ class WP_HTML_Tag_Processor {
 		 */
 		$this->lexical_updates[ $name ] = new WP_HTML_Text_Replacement(
 			$this->attributes[ $name ]->start,
-			$this->attributes[ $name ]->end,
+			$this->attributes[ $name ]->length,
 			''
 		);
+
+		// Removes any duplicated attributes if they were also present.
+		if ( null !== $this->duplicate_attributes && array_key_exists( $name, $this->duplicate_attributes ) ) {
+			foreach ( $this->duplicate_attributes[ $name ] as $attribute_token ) {
+				$this->lexical_updates[] = new WP_HTML_Text_Replacement(
+					$attribute_token->start,
+					$attribute_token->length,
+					''
+				);
+			}
+		}
 
 		return true;
 	}
@@ -2018,13 +2514,14 @@ class WP_HTML_Tag_Processor {
 	 * @return bool Whether the class was set to be added.
 	 */
 	public function add_class( $class_name ) {
-		if ( $this->is_closing_tag ) {
+		if (
+			self::STATE_MATCHED_TAG !== $this->parser_state ||
+			$this->is_closing_tag
+		) {
 			return false;
 		}
 
-		if ( null !== $this->tag_name_starts_at ) {
-			$this->classname_updates[ $class_name ] = self::ADD_CLASS;
-		}
+		$this->classname_updates[ $class_name ] = self::ADD_CLASS;
 
 		return true;
 	}
@@ -2038,7 +2535,10 @@ class WP_HTML_Tag_Processor {
 	 * @return bool Whether the class was set to be removed.
 	 */
 	public function remove_class( $class_name ) {
-		if ( $this->is_closing_tag ) {
+		if (
+			self::STATE_MATCHED_TAG !== $this->parser_state ||
+			$this->is_closing_tag
+		) {
 			return false;
 		}
 
@@ -2053,7 +2553,8 @@ class WP_HTML_Tag_Processor {
 	 * Returns the string representation of the HTML Tag Processor.
 	 *
 	 * @since 6.2.0
-	 * @see get_updated_html
+	 *
+	 * @see WP_HTML_Tag_Processor::get_updated_html()
 	 *
 	 * @return string The processed HTML.
 	 */
@@ -2065,6 +2566,8 @@ class WP_HTML_Tag_Processor {
 	 * Returns the string representation of the HTML Tag Processor.
 	 *
 	 * @since 6.2.0
+	 * @since 6.2.1 Shifts the internal cursor corresponding to the applied updates.
+	 * @since 6.4.0 No longer calls subclass method `next_tag()` after updating HTML.
 	 *
 	 * @return string The processed HTML.
 	 */
@@ -2075,57 +2578,52 @@ class WP_HTML_Tag_Processor {
 		 * When there is nothing more to update and nothing has already been
 		 * updated, return the original document and avoid a string copy.
 		 */
-		if ( $requires_no_updating && 0 === $this->bytes_already_copied ) {
+		if ( $requires_no_updating ) {
 			return $this->html;
 		}
 
 		/*
-		 * If there are no updates left to apply, but some have already
-		 * been applied, then finish by copying the rest of the input
-		 * to the end of the updated document and return.
+		 * Keep track of the position right before the current tag. This will
+		 * be necessary for reparsing the current tag after updating the HTML.
 		 */
-		if ( $requires_no_updating && $this->bytes_already_copied > 0 ) {
-			return $this->output_buffer . substr( $this->html, $this->bytes_already_copied );
-		}
-
-		// Apply the updates, rewind to before the current tag, and reparse the attributes.
-		$content_up_to_opened_tag_name = $this->output_buffer . substr(
-			$this->html,
-			$this->bytes_already_copied,
-			$this->tag_name_starts_at + $this->tag_name_length - $this->bytes_already_copied
-		);
+		$before_current_tag = $this->token_starts_at;
 
 		/*
-		 * 1. Apply the edits by flushing them to the output buffer and updating the copied byte count.
-		 *
-		 * Note: `apply_attributes_updates()` modifies `$this->output_buffer`.
+		 * 1. Apply the enqueued edits and update all the pointers to reflect those changes.
 		 */
 		$this->class_name_updates_to_attributes_updates();
-		$this->apply_attributes_updates();
+		$before_current_tag += $this->apply_attributes_updates( $before_current_tag );
 
 		/*
-		 * 2. Replace the original HTML with the now-updated HTML so that it's possible to
-		 *    seek to a previous location and have a consistent view of the updated document.
-		 */
-		$this->html                 = $this->output_buffer . substr( $this->html, $this->bytes_already_copied );
-		$this->output_buffer        = $content_up_to_opened_tag_name;
-		$this->bytes_already_copied = strlen( $this->output_buffer );
-
-		/*
-		 * 3. Point this tag processor at the original tag opener and consume it
+		 * 2. Rewind to before the current tag and reparse to get updated attributes.
 		 *
 		 * At this point the internal cursor points to the end of the tag name.
 		 * Rewind before the tag name starts so that it's as if the cursor didn't
 		 * move; a call to `next_tag()` will reparse the recently-updated attributes
 		 * and additional calls to modify the attributes will apply at this same
-		 * location.
+		 * location, but in order to avoid issues with subclasses that might add
+		 * behaviors to `next_tag()`, the internal methods should be called here
+		 * instead.
+		 *
+		 * It's important to note that in this specific place there will be no change
+		 * because the processor was already at a tag when this was called and it's
+		 * rewinding only to the beginning of this very tag before reprocessing it
+		 * and its attributes.
 		 *
 		 * <p>Previous HTML<em>More HTML</em></p>
-		 *                 ^  | back up by the length of the tag name plus the opening <
-		 *                 \<-/ back up by strlen("em") + 1 ==> 3
+		 *                 ↑  │ back up by the length of the tag name plus the opening <
+		 *                 └←─┘ back up by strlen("em") + 1 ==> 3
 		 */
-		$this->bytes_already_parsed = strlen( $content_up_to_opened_tag_name ) - $this->tag_name_length - 1;
-		$this->next_tag();
+		$this->bytes_already_parsed = $before_current_tag;
+		$this->parse_next_tag();
+		// Reparse the attributes.
+		while ( $this->parse_next_attribute() ) {
+			continue;
+		}
+
+		$tag_ends_at                = strpos( $this->html, '>', $this->bytes_already_parsed );
+		$this->token_length         = $tag_ends_at - $this->token_starts_at;
+		$this->bytes_already_parsed = $tag_ends_at;
 
 		return $this->html;
 	}
@@ -2145,7 +2643,6 @@ class WP_HTML_Tag_Processor {
 	 *     @type string|null $class_name   Tag must contain this class name to match.
 	 *     @type string      $tag_closers  "visit" or "skip": whether to stop on tag closers, e.g. </div>.
 	 * }
-	 * @return void
 	 */
 	private function parse_query( $query ) {
 		if ( null !== $query && $query === $this->last_query ) {
@@ -2202,7 +2699,7 @@ class WP_HTML_Tag_Processor {
 	 *
 	 * @since 6.2.0
 	 *
-	 * @return boolean Whether the given tag and its attribute match the search criteria.
+	 * @return bool Whether the given tag and its attribute match the search criteria.
 	 */
 	private function matches() {
 		if ( $this->is_closing_tag && ! $this->stop_on_tag_closers ) {
@@ -2241,67 +2738,63 @@ class WP_HTML_Tag_Processor {
 			}
 		}
 
-		$needs_class_name = null !== $this->sought_class_name;
-
-		if ( $needs_class_name && ! isset( $this->attributes['class'] ) ) {
-			return false;
-		}
-
-		/*
-		 * Match byte-for-byte (case-sensitive and encoding-form-sensitive) on the class name.
-		 *
-		 * This will overlook certain classes that exist in other lexical variations
-		 * than was supplied to the search query, but requires more complicated searching.
-		 */
-		if ( $needs_class_name ) {
-			$class_start = $this->attributes['class']->value_starts_at;
-			$class_end   = $class_start + $this->attributes['class']->value_length;
-			$class_at    = $class_start;
-
-			/*
-			 * Ensure that boundaries surround the class name to avoid matching on
-			 * substrings of a longer name. For example, the sequence "not-odd"
-			 * should not match for the class "odd" even though "odd" is found
-			 * within the class attribute text.
-			 *
-			 * See https://html.spec.whatwg.org/#attributes-3
-			 * See https://html.spec.whatwg.org/#space-separated-tokens
-			 */
-			while (
-				// phpcs:ignore WordPress.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
-				false !== ( $class_at = strpos( $this->html, $this->sought_class_name, $class_at ) ) &&
-				$class_at < $class_end
-			) {
-				/*
-				 * Verify this class starts at a boundary.
-				 */
-				if ( $class_at > $class_start ) {
-					$character = $this->html[ $class_at - 1 ];
-
-					if ( ' ' !== $character && "\t" !== $character && "\f" !== $character && "\r" !== $character && "\n" !== $character ) {
-						$class_at += strlen( $this->sought_class_name );
-						continue;
-					}
-				}
-
-				/*
-				 * Verify this class ends at a boundary as well.
-				 */
-				if ( $class_at + strlen( $this->sought_class_name ) < $class_end ) {
-					$character = $this->html[ $class_at + strlen( $this->sought_class_name ) ];
-
-					if ( ' ' !== $character && "\t" !== $character && "\f" !== $character && "\r" !== $character && "\n" !== $character ) {
-						$class_at += strlen( $this->sought_class_name );
-						continue;
-					}
-				}
-
-				return true;
-			}
-
+		if ( null !== $this->sought_class_name && ! $this->has_class( $this->sought_class_name ) ) {
 			return false;
 		}
 
 		return true;
 	}
+
+	/**
+	 * Parser Ready State
+	 *
+	 * Indicates that the parser is ready to run and waiting for a state transition.
+	 * It may not have started yet, or it may have just finished parsing a token and
+	 * is ready to find the next one.
+	 *
+	 * @since 6.5.0
+	 *
+	 * @access private
+	 */
+	const STATE_READY = 'STATE_READY';
+
+	/**
+	 * Parser Complete State
+	 *
+	 * Indicates that the parser has reached the end of the document and there is
+	 * nothing left to scan. It finished parsing the last token completely.
+	 *
+	 * @since 6.5.0
+	 *
+	 * @access private
+	 */
+	const STATE_COMPLETE = 'STATE_COMPLETE';
+
+	/**
+	 * Parser Incomplete State
+	 *
+	 * Indicates that the parser has reached the end of the document before finishing
+	 * a token. It started parsing a token but there is a possibility that the input
+	 * HTML document was truncated in the middle of a token.
+	 *
+	 * The parser is reset at the start of the incomplete token and has paused. There
+	 * is nothing more than can be scanned unless provided a more complete document.
+	 *
+	 * @since 6.5.0
+	 *
+	 * @access private
+	 */
+	const STATE_INCOMPLETE = 'STATE_INCOMPLETE';
+
+	/**
+	 * Parser Matched Tag State
+	 *
+	 * Indicates that the parser has found an HTML tag and it's possible to get
+	 * the tag name and read or modify its attributes (if it's not a closing tag).
+	 *
+	 * @since 6.5.0
+	 *
+	 * @access private
+	 */
+	const STATE_MATCHED_TAG = 'STATE_MATCHED_TAG';
 }

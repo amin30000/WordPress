@@ -185,8 +185,10 @@ function register_sidebars( $number = 1, $args = array() ) {
 			$_args['name'] = isset( $args['name'] ) ? $args['name'] : __( 'Sidebar' );
 		}
 
-		// Custom specified ID's are suffixed if they exist already.
-		// Automatically generated sidebar names need to be suffixed regardless starting at -0.
+		/*
+		 * Custom specified ID's are suffixed if they exist already.
+		 * Automatically generated sidebar names need to be suffixed regardless starting at -0.
+		 */
 		if ( isset( $args['id'] ) ) {
 			$_args['id'] = $args['id'];
 			$n           = 2; // Start at -2 for conflicting custom IDs.
@@ -908,7 +910,7 @@ function is_active_widget( $callback = false, $widget_id = false, $id_base = fal
 
 	if ( is_array( $sidebars_widgets ) ) {
 		foreach ( $sidebars_widgets as $sidebar => $widgets ) {
-			if ( $skip_inactive && ( 'wp_inactive_widgets' === $sidebar || 'orphaned_widgets' === substr( $sidebar, 0, 16 ) ) ) {
+			if ( $skip_inactive && ( 'wp_inactive_widgets' === $sidebar || str_starts_with( $sidebar, 'orphaned_widgets' ) ) ) {
 				continue;
 			}
 
@@ -1013,8 +1015,10 @@ function wp_get_sidebars_widgets( $deprecated = true ) {
 
 	global $_wp_sidebars_widgets, $sidebars_widgets;
 
-	// If loading from front page, consult $_wp_sidebars_widgets rather than options
-	// to see if wp_convert_widget_settings() has made manipulations in memory.
+	/*
+	 * If loading from front page, consult $_wp_sidebars_widgets rather than options
+	 * to see if wp_convert_widget_settings() has made manipulations in memory.
+	 */
 	if ( ! is_admin() ) {
 		if ( empty( $_wp_sidebars_widgets ) ) {
 			$_wp_sidebars_widgets = get_option( 'sidebars_widgets', array() );
@@ -1366,6 +1370,8 @@ function retrieve_widgets( $theme_changed = false ) {
  * @since 4.9.0
  * @since 4.9.2 Always tries to restore widget assignments from previous data, not just if sidebars needed mapping.
  *
+ * @global array $wp_registered_sidebars The registered sidebars.
+ *
  * @param array $existing_sidebars_widgets List of sidebars and their widget instance IDs.
  * @return array Mapped sidebars widgets.
  */
@@ -1382,7 +1388,7 @@ function wp_map_sidebars_widgets( $existing_sidebars_widgets ) {
 	}
 
 	foreach ( $existing_sidebars_widgets as $sidebar => $widgets ) {
-		if ( 'wp_inactive_widgets' === $sidebar || 'orphaned_widgets' === substr( $sidebar, 0, 16 ) ) {
+		if ( 'wp_inactive_widgets' === $sidebar || str_starts_with( $sidebar, 'orphaned_widgets' ) ) {
 			$new_sidebars_widgets['wp_inactive_widgets'] = array_merge( $new_sidebars_widgets['wp_inactive_widgets'], (array) $widgets );
 			unset( $existing_sidebars_widgets[ $sidebar ] );
 		}
@@ -1490,7 +1496,7 @@ function wp_map_sidebars_widgets( $existing_sidebars_widgets ) {
 
 		// Remove orphaned widgets, we're only interested in previously active sidebars.
 		foreach ( $old_sidebars_widgets as $sidebar => $widgets ) {
-			if ( 'orphaned_widgets' === substr( $sidebar, 0, 16 ) ) {
+			if ( str_starts_with( $sidebar, 'orphaned_widgets' ) ) {
 				unset( $old_sidebars_widgets[ $sidebar ] );
 			}
 		}
@@ -1539,6 +1545,8 @@ function wp_map_sidebars_widgets( $existing_sidebars_widgets ) {
  * Compares a list of sidebars with their widgets against an allowed list.
  *
  * @since 4.9.0
+ *
+ * @global array $wp_registered_widgets
  *
  * @param array $sidebars_widgets   List of sidebars and their widget instance IDs.
  * @param array $allowed_widget_ids Optional. List of widget IDs to compare against. Default: Registered widgets.
@@ -1627,7 +1635,7 @@ function wp_widget_rss_output( $rss, $args = array() ) {
 			$summary = $desc;
 
 			// Change existing [...] to [&hellip;].
-			if ( '[...]' === substr( $summary, -5 ) ) {
+			if ( str_ends_with( $summary, '[...]' ) ) {
 				$summary = substr( $summary, 0, -5 ) . '[&hellip;]';
 			}
 
@@ -1964,6 +1972,9 @@ function wp_assign_widget_to_sidebar( $widget_id, $sidebar_id ) {
  *
  * @since 5.8.0
  *
+ * @global array $wp_registered_widgets
+ * @global array $wp_registered_sidebars
+ *
  * @param string $widget_id Widget ID.
  * @param string $sidebar_id Sidebar ID.
  * @return string
@@ -2029,6 +2040,8 @@ function wp_render_widget( $widget_id, $sidebar_id ) {
  * Calls the control callback of a widget and returns the output.
  *
  * @since 5.8.0
+ *
+ * @global array $wp_registered_widget_controls
  *
  * @param string $id Widget ID.
  * @return string|null
